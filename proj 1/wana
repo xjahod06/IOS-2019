@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+function TIMES {
+	DATE=$(date -d "$1" +"%d/%b/%Y")	#prevede na fromat den/mesic(prvni 3pismena)/rok
+	HOUR=$(date -d "$2" +"%H:%M:%S")	#prevede na cas hodiny:minuty:sekundy
+	TIME="$DATE:$HOUR" 				#spoji datum a cas :
+}
+
+function after {
+	cmp_times=$(echo "$vstup" | grep -o '[0-9]*/[A-Za-Z]*/[0-9]*:[0-9]*:[0-9]*:[0-9]*') #najde vsechny vyskyty regexuve formatu den/mesic/rok:hodiy:minuty:sekundy
+	l=0
+	while read -r cmp_time; do  								#cte po radcich STDIN a uklada do promene smp_time
+		((l++))
+		if [[ $TIME < $cmp_time ]]; then					#porovnava radek se vstupnim casem
+			line=$( echo "$vstup" | head -${l} | tail -1)	#pokud odpovida radek casu tak do promene line ulozi stejny radek ale cely
+			tmp=$(echo -e "$tmp\n$line")					#spoji 2 promenne s odradkovanim (prvni radek prazdny)
+		fi
+	done <<< "$cmp_times"									#privede promenou cmp_times na STDIN pro funkci read
+	vstup=$(echo "$tmp" |sed -n '1!p')						#odstrani prvni radek promenne
+	tmp=null
+}
+
+function before {
+	cmp_times=$(echo "$vstup" | grep -o '[0-9]*/[A-Za-Z]*/[0-9]*:[0-9]*:[0-9]*:[0-9]*')	#najde vsechny vyskyty regexuve formatu den/mesic/rok:hodiy:minuty:sekundy
+	l=0
+	while read -r cmp_time; do 								#cte po radcich STDIN a uklada do promene smp_time
+		((l++))
+		if [[ $TIME > $cmp_time ]]; then					#porovnava radek se vstupnim casem
+			line=$( echo "$vstup" | head -${l} | tail -1)	#pokud odpovida radek casu tak do promene line ulozi stejny radek ale cely
+			tmp=$(echo -e "$tmp\n$line")					#spoji 2 promenne s odradkovanim (prvni radek prazdny)
+		fi
+	done <<< "$cmp_times"									#privede promenou cmp_times na STDIN pro funkci read
+	vstup=$(echo "$tmp" |sed -n '1!p')						#odstrani prvni radek promenne
+	tmp=null
+}
+
+function filtr {
+	if [ -n "$ipaddr" ]; then
+		vstup=$(echo "$vstup" | grep "$ipaddr")				#vypise vsechny vykyty odpovidajici zadane IP
+	fi
+	if [ -n "$uri" ]; then
+		vstup=$(echo "$vstup" | grep -P "$uri")				#vypise vsechnyradky odpovidajici zadane uri (libovolny RegEx vyraz)
+	fi
+	if [ -n "$date_a" ]; then		
+		TIMES "$date_a" "$hour_a"
+		after "$TIME"
+	fi
+	if [ -n "$date_b" ]; then
+		TIMES "$date_b" "$hour_b"
+		before "$TIME"
+	fi
+}
+function commands {
+	if [ "$list_ip" == "true" ]; then
+		vystup=$(echo "$vstup" | grep -oE '^\S+'| sort | uniq)						#vypise IP (nebile znaky do prvni mezery)
+		out=$(echo -e "$out\n$vystup")												#preda vystupni promennou na out	
+	fi
+	if [ "$list_hosts" == "true" ]; then
+		vystup=$(echo "$vstup" | grep -oE '^\S+'| sort | uniq)						#vypise IP (nebile znaky do prni mezery)
+		if [ -n "$vystup" ]; then 												#kontroluje jestli promenna vstup neni prazdna (nic se nenacetlo)
+			while read -r line; do
+				name=$(host "$line")													#pouzije prikaz host na zjisteni domenoveho jmena
+				host_name=$(echo "$name" | grep -Po '(?<= pointer ).*$')			#vypise vse po vyskytu slova "pointer"
+				if [ -n "$host_name" ]; then										#kontroluje jestli se naslo domenove jmeno
+					line=$host_name													#pokud ano tak line prepise domenou
+				fi 																	#pokud ne tak necha line stejny tj. IP adresa 
+				tmp=$(echo -e "$tmp\n$line")
+			done <<< "$vystup"
+			vystup=$(echo "$tmp" |sed -n '1!p')
+			out=$(echo -e "$out\n$vystup")
+			tmp=null
+		fi
+	fi
+	if [ "$list_uri" == "true" ]; then
+		vystup=$(echo "$vstup" | grep -Po '(?<=GET | POST | HEAD )\S*' | sort | uniq) #vezme vsechny nebile znaky po vyskytu GET, POST nebo HEAD 
+		out=$(echo -e "$out\n$vystup")
+	fi
+	if [ "$hist_ip" == "true" ]; then
+		vystup=$(echo "$vstup" | grep -Po '^\S+'| sort | uniq -c | sort -n -r) #nacte IP adressy, ktere seradi, zredukuje na unikatni a napise jejich pocet, seradi podle vyskytu a obrati poradi
+		while read -r line; do
+			count=$(echo "$line" | grep -Po '^\S+')									#vezme prvnich x nebilich znaku (pocet vyskytu)
+			ip=$(echo "$line" | grep -Po '\S+$')									#vezme poslednich x nebilich znaku (ip)
+			line="$ip ($count): $(printf "%0.s#" $(seq 1 "$count"))"					#spojit ip, count: a vypise count*# jako pocet vyskytu
+			tmp=$(echo -e "$tmp\n$line")
+		done <<< "$vystup"
+		vystup=$(echo "$tmp" |sed -n '1!p')
+		out=$(echo -e "$out\n$vystup")
+		tmp=null
+	fi
+	if [[ "$hist_load" == "true" ]]; then
+		times=$(echo "$vstup" | grep -o '[0-9]*/[A-Za-Z]*/[0-9]*:[0-9]*' | sort | uniq -c ) #najde vsechny casy, seradi a spocita vyskyty
+		while read -r line; do
+			count=$(echo "$line" | grep -Po '^\S+')									#vezme prvnich x nebilich znaku (pocet vyskytu)
+			tm=$(echo "$line" | grep -Po '\S+$' | awk -v FS=/ -v OFS=' ' '{print $1,$2,$3}' | awk -v FS=: -v OFS=' ' '{print $1,$2}') #vezme poslednich x nebilich znaku a upravi format z "22/Feb/2019:07" na "22 02 2019 07"
+			time=$(date -d "$tm" +"%d-%m-%Y %H")									#predela format data
+			line="$time:00 ($count): $(printf "%0.s#" $(seq 1 "$count"))"				#spojit cas:00, count: a vypise count*# jako pocet vyskytu v danem case
+			tmp=$(echo -e "$tmp\n$line")
+		done <<< "$times"
+		vystup=$(echo "$tmp" |sed -n '1!p')
+		out=$(echo -e "$out\n$vystup")
+		tmp=null
+	fi
+}
+
+function ipaddress {		#kontrola IP adressy podle RegExu ale pouze format nikoli funkcionalitu
+	if [[ ! $ipaddr =~ ^([0-9]{1,3}\.){3}[0-9]{0,2}[1-9]$ ]] && [[ ! $ipaddr =~ ^([0-9a-fA-F]{1,4}:?)+::([0-9a-fA-F]{1,4}:?)+?$ ]] && [[ ! $ipaddr =~ ^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$ ]]; then #RegEX -> check IP format
+		echo "$ipaddr is not an IPV4 or IPV6 format"
+		end=true
+	fi
+	((i++))
+	vypis=false
+}
+
+function DATES {
+	if ! date -d "$1" &> /dev/null; then 		#kontroluje format data
+		echo "$1 is not a valid date format"
+		end=true
+	fi
+	if ! date -d "$2" &> /dev/null; then		#kontroluje format casu
+		echo "$2 is not a valid time format"
+		end=true
+	fi
+	((i++))
+	vypis=false
+}
+
+export "POSIXLY_CORRECT=yes"					#netucim co to dela ale je to v zadani Enjoy :) 
+i=1												#											
+arg=${!i}										#
+vypis=true										#kontrolni primenne pro orientaci
+soubor=false									#
+end=false										#
+prikaz=false									#
+while [ -n "$arg" ]; do
+	((i++))
+	if [ "$arg" == "-a" ]; then
+		date=${!i}
+		date_a=$(echo $date | cut -f1 -d' ')	#rozdeli argument 019-02-22 09:44:62
+		hour_a=$(echo $date | cut -f2 -d' ')	#na datum a cas
+		DATES "$date_a" "$hour_a"					#posle data na kontrolu
+	elif [ "$arg" == "-b" ]; then
+		date=${!i}
+		date_b=$(echo $date | cut -f1 -d' ')	#rozdeli argument 019-02-22 09:44:62
+		hour_b=$(echo $date | cut -f2 -d' ')	#na datum a cas
+		DATES "$date_b" "$hour_b"					#posle data na kontrolu
+	elif [ "$arg" == "-ip" ]; then
+		ipaddr=${!i}
+		ipaddress								#posle IP na konrolu
+	elif [ "$arg" == "-uri" ]; then
+		uri=${!i}
+		((i++))
+		vypis=false
+	elif [ "$arg" == "list-ip" ]; then
+		list_ip=true
+		vypis=false
+		prikaz=true
+	elif [ "$arg" == "list-hosts" ]; then
+		list_hosts=true
+		vypis=false
+		prikaz=true
+	elif [ "$arg" == "list-uri" ]; then
+		list_uri=true
+		vypis=false
+		prikaz=true
+	elif [ "$arg" == "hist-ip" ]; then
+		hist_ip=true
+		vypis=false
+		prikaz=true
+	elif [ "$arg" == "hist-load" ]; then
+		hist_load=true
+		vypis=false
+		prikaz=true
+	elif [ -f "$arg" ]; then					#kontroluje jestli soubor existuje
+		file_name=$arg
+		gz=$(echo "$file_name" | grep "\.gz$")	#kontroluje jestli soubr ma priponu .gz
+		if [ -n "$gz" ]; then				
+			file_in=$(gunzip -c $file_name)		#pokud ji ma tak odzipuje a otevre soubor
+		else
+			file_in=$(cat $arg)					#pokud ne tak jenom otevre
+		fi
+		input=$(echo -e "$input\n$file_in" )	#nacita vsechny soubory do inputu
+		soubor=true
+
+	else
+		echo "there is no file" $arg 			#pokud argument neni filtr,prikaz ani soubor tak ukonci beh programu
+		exit 1
+	fi
+
+	if [ $end == "true" ]; then					#pro ukonceni behu programmu s chybou
+		exit 1
+	fi
+
+arg=${!i}										#nacte dalsi argument
+done
+if [ "$vypis" == "false" ]; then				#pokud byl zadan filtr nebo prikaz tak je provede
+	vstup=$(echo "$input" |sed -n '1!p')
+	filtr
+	commands
+fi
+if [ $soubor == "false" ]; then					#pokud nebyl zadan soubor tak bere vstup z STDIN
+	while read -r line;do
+		tmp=$(echo -e "$tmp\n$line")
+	done
+	vstup=$(echo "$tmp" |sed -n '1!p')
+	tmp=null
+	line=null
+	filtr
+	commands
+fi
+if [ $soubor == "true" ]; then
+	vstup=$(echo "$input" |sed -n '1!p')
+fi
+if [ $prikaz == "false" ]; then
+	echo "$vstup"
+else
+	out=$( echo "$out" | sed -n '1!p' | uniq )		#odstani prvni radek vystupu a zkontroluje jeho unikatnost
+	echo "$out"										#vypis na STDIN
+fi
+exit 0
